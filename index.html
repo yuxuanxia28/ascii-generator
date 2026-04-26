@@ -5,9 +5,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ASCII Cat Animator</title>
     <style>
+        :root {
+            --ui-color: #00FF41; /* Fixed UI Green */
+            --canvas-text-color: #00FF41; /* Customizable canvas text */
+            --canvas-bg: #050505; /* Canvas background */
+        }
+
         body {
-            background-color: #050505;
-            color: #00FF41; /* Classic Matrix Green */
+            background-color: #1a1a1a;
+            color: var(--ui-color);
             font-family: 'Courier New', Courier, monospace;
             display: flex;
             flex-direction: column;
@@ -16,6 +22,7 @@
             height: 100vh;
             margin: 0;
             overflow: hidden;
+            transition: color 0.3s;
         }
 
         .controls {
@@ -27,7 +34,7 @@
         h1 {
             margin: 0 0 10px 0;
             font-size: 1.5rem;
-            text-shadow: 0 0 8px rgba(0, 255, 65, 0.6);
+            text-shadow: 0 0 8px var(--ui-color);
         }
 
         p {
@@ -37,8 +44,15 @@
             margin: 0 auto 15px auto;
         }
 
+        .controls-row {
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+            align-items: center;
+        }
+
         .btn {
-            background-color: #00FF41;
+            background-color: var(--ui-color);
             color: #050505;
             padding: 8px 16px;
             cursor: pointer;
@@ -49,18 +63,54 @@
         }
 
         .btn:hover {
-            background-color: #00cc33;
-            box-shadow: 0 0 10px rgba(0, 255, 65, 0.5);
+            filter: brightness(1.2);
+            box-shadow: 0 0 10px var(--ui-color);
+        }
+
+        #record-btn {
+            transition: background-color 0.3s, color 0.3s;
+        }
+
+        .color-picker-label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+
+        input[type="color"] {
+            background: none;
+            border: 1px solid var(--ui-color);
+            border-radius: 4px;
+            height: 34px;
+            width: 40px;
+            cursor: pointer;
+            padding: 0;
+        }
+
+        input[type="color"]::-webkit-color-swatch-wrapper {
+            padding: 0;
+        }
+        
+        input[type="color"]::-webkit-color-swatch {
+            border: none;
+            border-radius: 3px;
         }
 
         #ascii-container {
+            background-color: var(--canvas-bg);
+            color: var(--canvas-text-color);
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
             /* Keeps the text responsive to the screen size */
             font-size: clamp(6px, 1.2vw, 14px);
             line-height: 1;
             letter-spacing: 0;
             white-space: pre;
             user-select: none;
-            text-shadow: 0 0 4px rgba(0, 255, 65, 0.4);
+            text-shadow: 0 0 4px var(--canvas-text-color);
         }
     </style>
 </head>
@@ -69,10 +119,22 @@
     <div class="controls">
         <h1>ASCII Cat Animator</h1>
         <p>Playing default animation. Upload your specific video reference to map it to real-time ASCII!</p>
-        <label class="btn">
-            Upload Reference Video
-            <input type="file" id="video-upload" accept="video/*" style="display:none;">
-        </label>
+        
+        <div class="controls-row">
+            <label class="btn">
+                Upload Reference Video
+                <input type="file" id="video-upload" accept="video/*" style="display:none;">
+            </label>
+            <button id="record-btn" class="btn">Record Video</button>
+            <label class="color-picker-label">
+                Text:
+                <input type="color" id="color-picker" value="#00FF41">
+            </label>
+            <label class="color-picker-label">
+                Canvas:
+                <input type="color" id="bg-picker" value="#050505">
+            </label>
+        </div>
     </div>
 
     <div id="ascii-container"></div>
@@ -80,7 +142,20 @@
     <script>
         const fileInput = document.getElementById('video-upload');
         const container = document.getElementById('ascii-container');
+        const colorPicker = document.getElementById('color-picker');
+        const bgPicker = document.getElementById('bg-picker');
+        const recordBtn = document.getElementById('record-btn');
         
+        // Update CSS variable on color pick
+        colorPicker.addEventListener('input', (e) => {
+            document.documentElement.style.setProperty('--canvas-text-color', e.target.value);
+        });
+
+        // Update CSS variable on canvas background color pick
+        bgPicker.addEventListener('input', (e) => {
+            document.documentElement.style.setProperty('--canvas-bg', e.target.value);
+        });
+
         // Setup hidden canvas and video elements for processing
         const video = document.createElement('video');
         video.loop = true;
@@ -95,6 +170,125 @@
 
         let isPlayingVideo = false;
         let fallbackInterval;
+
+        // --- Recording Variables ---
+        let isRecording = false;
+        let mediaRecorder;
+        let recordedChunks = [];
+        const outputCanvas = document.createElement('canvas');
+        const outCtx = outputCanvas.getContext('2d');
+
+        // Centralized display update function to handle both DOM and Canvas recording
+        function updateDisplay(asciiStr) {
+            container.textContent = asciiStr;
+            
+            if (isRecording) {
+                drawToOutputCanvas(asciiStr);
+            }
+        }
+
+        function drawToOutputCanvas(asciiStr) {
+            const lines = asciiStr.split('\n');
+            const fontSize = 12;
+            const lineHeight = 12;
+            outCtx.font = `bold ${fontSize}px "Courier New", Courier, monospace`;
+            
+            // Calculate canvas size based on the text
+            const expectedHeight = lines.length * lineHeight + 40;
+            // Measure the longest line (usually the first one in this setup)
+            const longestLine = lines.reduce((a, b) => a.length > b.length ? a : b, "");
+            const expectedWidth = outCtx.measureText(longestLine).width + 40;
+            
+            // Resize canvas if needed
+            if (outputCanvas.width !== Math.floor(expectedWidth) || outputCanvas.height !== expectedHeight) {
+                outputCanvas.width = Math.floor(expectedWidth);
+                outputCanvas.height = expectedHeight;
+                // Re-apply font after resize
+                outCtx.font = `bold ${fontSize}px "Courier New", Courier, monospace`; 
+            }
+            
+            const bgColor = getComputedStyle(document.documentElement).getPropertyValue('--canvas-bg').trim() || '#050505';
+            const textColor = getComputedStyle(document.documentElement).getPropertyValue('--canvas-text-color').trim() || '#00FF41';
+            
+            // Fill Background
+            outCtx.fillStyle = bgColor;
+            outCtx.fillRect(0, 0, outputCanvas.width, outputCanvas.height);
+            
+            // Draw Text
+            outCtx.fillStyle = textColor;
+            outCtx.textBaseline = "top";
+            for (let i = 0; i < lines.length; i++) {
+                outCtx.fillText(lines[i], 20, 20 + i * lineHeight);
+            }
+        }
+
+        // --- Recording Logic ---
+        recordBtn.addEventListener('click', () => {
+            if (!isRecording) {
+                startRecording();
+            } else {
+                stopRecording();
+            }
+        });
+
+        function startRecording() {
+            // Force an initial draw to set canvas dimensions before starting stream
+            drawToOutputCanvas(container.textContent || "");
+            
+            const stream = outputCanvas.captureStream(30); // 30 FPS
+            recordedChunks = [];
+            
+            // Try to use webm natively
+            let mimeType = 'video/webm';
+            if (MediaRecorder.isTypeSupported('video/webm; codecs=vp9')) {
+                mimeType = 'video/webm; codecs=vp9';
+            }
+            
+            mediaRecorder = new MediaRecorder(stream, { mimeType });
+            
+            mediaRecorder.ondataavailable = (e) => {
+                if (e.data.size > 0) recordedChunks.push(e.data);
+            };
+            
+            mediaRecorder.onstop = () => {
+                const blob = new Blob(recordedChunks, { type: 'video/webm' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.style.display = 'none';
+                a.href = url;
+                a.download = 'ascii_animation.webm';
+                document.body.appendChild(a);
+                a.click();
+                
+                // Cleanup
+                setTimeout(() => {
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                }, 100);
+            };
+            
+            mediaRecorder.start();
+            isRecording = true;
+            
+            // Update UI
+            recordBtn.textContent = 'Stop & Save';
+            recordBtn.style.backgroundColor = '#ff3333';
+            recordBtn.style.color = '#ffffff';
+            recordBtn.style.boxShadow = '0 0 15px #ff3333';
+        }
+
+        function stopRecording() {
+            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                mediaRecorder.stop();
+            }
+            isRecording = false;
+            
+            // Revert UI
+            recordBtn.textContent = 'Record Video';
+            recordBtn.style.backgroundColor = 'var(--ui-color)';
+            recordBtn.style.color = '#050505';
+            recordBtn.style.boxShadow = '';
+        }
 
         // ----------------------------------------------------
         // FALLBACK: Hand-crafted ASCII walk cycle
@@ -138,7 +332,8 @@ String.raw`
             let frameIdx = 0;
             // Pad the smaller hand-drawn ASCII to keep it centered
             fallbackInterval = setInterval(() => {
-                container.textContent = "\n\n\n\n\n\n" + catFrames[frameIdx];
+                const frameStr = "\n\n\n\n\n\n" + catFrames[frameIdx];
+                updateDisplay(frameStr);
                 frameIdx = (frameIdx + 1) % catFrames.length;
             }, 180); // 180ms per frame
         }
@@ -211,8 +406,8 @@ String.raw`
                 asciiStr += "\n"; // Next row
             }
             
-            // Update the DOM
-            container.textContent = asciiStr;
+            // Update the DOM and Canvas stream
+            updateDisplay(asciiStr);
             
             // Request next frame
             requestAnimationFrame(drawFrame);
